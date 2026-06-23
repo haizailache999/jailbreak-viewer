@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Jailbreak Generation Viewer</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <p class="eyebrow">Jailbreak generation review</p>
+        <h1 id="runTitle">Jailbreak results</h1>
+      </div>
+      <div class="selection-status">
+        <span id="currentStepLabel">Prompt -- · Trial -- · Attack --</span>
+        <span id="checkpointCounter">-- responses</span>
+      </div>
+    </header>
+
+    <div id="loadError" class="load-error" hidden></div>
+
+    <div class="app-shell">
+      <aside class="sidebar">
+        <section class="panel">
+          <h2>Run</h2>
+          <dl class="meta-list">
+            <div>
+              <dt>Model</dt>
+              <dd id="modelName">--</dd>
+            </div>
+            <div>
+              <dt>Experiment</dt>
+              <dd id="experimentName">--</dd>
+            </div>
+            <div>
+              <dt>Attack types</dt>
+              <dd id="checkpointCount">--</dd>
+            </div>
+            <div>
+              <dt>Items</dt>
+              <dd id="itemCount">--</dd>
+            </div>
+            <div>
+              <dt>Selection</dt>
+              <dd id="selectionSummary">--</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="panel">
+          <h2>Controls</h2>
+          <div class="control-block">
+            <div class="control-label-row">
+              <span>Prompt</span>
+              <strong id="promptValueLabel">--</strong>
+            </div>
+            <select id="promptSelect"></select>
+            <input id="promptRange" type="range" min="0" max="0" value="0" aria-label="Prompt slider">
+            <div class="slider-scale">
+              <span id="promptMinLabel">0</span>
+              <span>All</span>
+            </div>
+          </div>
+
+          <div class="control-block">
+            <div class="control-label-row">
+              <span>Trial</span>
+              <strong id="trialValueLabel">--</strong>
+            </div>
+            <select id="trialSelect"></select>
+            <input id="trialRange" type="range" min="0" max="0" value="0" aria-label="Trial slider">
+            <div class="slider-scale">
+              <span id="trialMinLabel">0</span>
+              <span>All</span>
+            </div>
+          </div>
+
+          <div class="control-block">
+            <div class="control-label-row">
+              <span>Attack type</span>
+              <strong id="variantValueLabel">--</strong>
+            </div>
+            <select id="variantSelect"></select>
+            <input id="variantRange" type="range" min="0" max="0" value="0" aria-label="Attack type slider">
+            <div class="slider-scale">
+              <span id="variantMinLabel">Original</span>
+              <span>All</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Prompt Figure</h2>
+          <div id="promptFigureMount" class="figure-mount prompt-figure-mount"></div>
+        </section>
+
+        <section class="panel">
+          <h2>Metrics</h2>
+          <div id="figureMount" class="figure-mount"></div>
+        </section>
+      </aside>
+
+      <main class="result-mount">
+        <section class="result-overview">
+          <div>
+            <p class="eyebrow result-eyebrow">Selected view</p>
+            <h2 id="resultTitle">Response</h2>
+          </div>
+          <div id="resultSummary" class="result-summary">--</div>
+        </section>
+        <div id="resultList" class="generation-list" aria-live="polite">
+          <div class="status-line result-status">Loading viewer data...</div>
+        </div>
+        <button id="loadMoreButton" class="load-more-button" type="button" hidden>Load more</button>
+      </main>
+    </div>
+
+    <script src="app.js?v=20260623-jailbreak" defer></script>
+  </body>
+</html>

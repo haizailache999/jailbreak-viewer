@@ -1,0 +1,691 @@
+const ALL_VALUE = "all";
+const DATA_VERSION = "20260623-jailbreak";
+const PAGE_SIZE = 80;
+const CHUNKS_PER_BATCH = 20;
+
+const state = {
+  manifest: null,
+  loadedChunks: new Map(),
+  loading: new Map(),
+  promptValue: ALL_VALUE,
+  trialValue: ALL_VALUE,
+  variantValue: ALL_VALUE,
+  resultSession: 0,
+  resultChunkIndexes: [],
+  resultChunkCursor: 0,
+  pendingItems: [],
+  renderedCount: 0,
+  scannedChunkCount: 0,
+  isLoadingBatch: false
+};
+
+const els = {
+  runTitle: document.getElementById("runTitle"),
+  currentStepLabel: document.getElementById("currentStepLabel"),
+  checkpointCounter: document.getElementById("checkpointCounter"),
+  loadError: document.getElementById("loadError"),
+  modelName: document.getElementById("modelName"),
+  experimentName: document.getElementById("experimentName"),
+  checkpointCount: document.getElementById("checkpointCount"),
+  itemCount: document.getElementById("itemCount"),
+  selectionSummary: document.getElementById("selectionSummary"),
+  promptSelect: document.getElementById("promptSelect"),
+  trialSelect: document.getElementById("trialSelect"),
+  variantSelect: document.getElementById("variantSelect"),
+  promptRange: document.getElementById("promptRange"),
+  trialRange: document.getElementById("trialRange"),
+  variantRange: document.getElementById("variantRange"),
+  promptValueLabel: document.getElementById("promptValueLabel"),
+  trialValueLabel: document.getElementById("trialValueLabel"),
+  variantValueLabel: document.getElementById("variantValueLabel"),
+  promptMinLabel: document.getElementById("promptMinLabel"),
+  trialMinLabel: document.getElementById("trialMinLabel"),
+  variantMinLabel: document.getElementById("variantMinLabel"),
+  promptFigureMount: document.getElementById("promptFigureMount"),
+  figureMount: document.getElementById("figureMount"),
+  resultTitle: document.getElementById("resultTitle"),
+  resultSummary: document.getElementById("resultSummary"),
+  resultList: document.getElementById("resultList"),
+  loadMoreButton: document.getElementById("loadMoreButton")
+};
+
+function compactNumber(value) {
+  return new Intl.NumberFormat("en-US").format(value);
+}
+
+function shortText(value, maxLength = 82) {
+  const clean = String(value || "").replace(/\s+/g, " ").trim();
+  if (clean.length <= maxLength) {
+    return clean;
+  }
+  return `${clean.slice(0, maxLength - 3)}...`;
+}
+
+function makeEl(tag, className, text) {
+  const element = document.createElement(tag);
+  if (className) {
+    element.className = className;
+  }
+  if (text !== undefined) {
+    element.textContent = text;
+  }
+  return element;
+}
+
+function setError(message) {
+  els.loadError.hidden = false;
+  els.loadError.textContent = message;
+}
+
+function showResultStatus(message) {
+  if (state.renderedCount > 0) {
+    return;
+  }
+  els.resultList.innerHTML = "";
+  els.resultList.appendChild(makeEl("div", "status-line result-status", message));
+}
+
+function clearResultStatus() {
+  els.resultList.querySelectorAll(".result-status").forEach((node) => {
+    node.remove();
+  });
+}
+
+function assetUrl(relativePath) {
+  return new URL(relativePath, document.baseURI).href;
+}
+
+async function fetchJson(path) {
+  const response = await fetch(assetUrl(path));
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}`);
+  }
+  return response.json();
+}
+
+function variantLabel(variantId) {
+  const entry = (state.manifest.variants || []).find((variant) => variant.id === variantId);
+  return entry ? entry.label : String(variantId);
+}
+
+function promptValues() {
+  return state.manifest.prompts.map((prompt) => String(prompt.id)).concat(ALL_VALUE);
+}
+
+function trialValues() {
+  return state.manifest.trials.map((trial) => String(trial)).concat(ALL_VALUE);
+}
+
+function variantValues() {
+  return state.manifest.variants.map((variant) => String(variant.id)).concat(ALL_VALUE);
+}
+
+function controlValues(kind) {
+  if (kind === "prompt") {
+    return promptValues();
+  }
+  if (kind === "trial") {
+    return trialValues();
+  }
+  return variantValues();
+}
+
+function controlElements(kind) {
+  if (kind === "prompt") {
+    return {
+      select: els.promptSelect,
+      range: els.promptRange,
+      label: els.promptValueLabel
+    };
+  }
+  if (kind === "trial") {
+    return {
+      select: els.trialSelect,
+      range: els.trialRange,
+      label: els.trialValueLabel
+    };
+  }
+  return {
+    select: els.variantSelect,
+    range: els.variantRange,
+    label: els.variantValueLabel
+  };
+}
+
+function controlStateKey(kind) {
+  return `${kind}Value`;
+}
+
+function labelForValue(kind, value) {
+  if (value === ALL_VALUE) {
+    if (kind === "prompt") {
+      return "All prompts";
+    }
+    if (kind === "trial") {
+      return "All trials";
+    }
+    return "All attack types";
+  }
+
+  if (kind === "prompt") {
+    return `Prompt ${value}`;
+  }
+  if (kind === "trial") {
+    return `Trial ${value}`;
+  }
+  return variantLabel(value);
+}
+
+function optionLabelForValue(kind, value) {
+  if (value === ALL_VALUE) {
+    return labelForValue(kind, value);
+  }
+
+  if (kind === "prompt") {
+    const prompt = state.manifest.prompts.find((entry) => String(entry.id) === String(value));
+    return `Prompt ${value}: ${shortText(prompt ? prompt.text : "", 70)}`;
+  }
+
+  return labelForValue(kind, value);
+}
+
+function setRangeFill(range) {
+  const max = Math.max(1, Number(range.max));
+  const pct = Math.round((Number(range.value) / max) * 100);
+  range.style.background = `linear-gradient(90deg, var(--accent) ${pct}%, #d6ddd8 ${pct}%)`;
+}
+
+function sliderIndexToValue(kind, index) {
+  const values = controlValues(kind);
+  const safeIndex = Math.max(0, Math.min(Number(index), values.length - 1));
+  return values[safeIndex];
+}
+
+function valueToSliderIndex(kind, value) {
+  const values = controlValues(kind);
+  const index = values.indexOf(String(value));
+  return index >= 0 ? index : 0;
+}
+
+function syncControl(kind) {
+  const value = state[controlStateKey(kind)];
+  const { select, range, label } = controlElements(kind);
+  const sliderIndex = valueToSliderIndex(kind, value);
+
+  select.value = value;
+  range.value = String(sliderIndex);
+  label.textContent = labelForValue(kind, value);
+  setRangeFill(range);
+}
+
+function setControl(kind, value, options = {}) {
+  state[controlStateKey(kind)] = String(value);
+  syncControl(kind);
+
+  if (kind === "prompt") {
+    renderPromptFigure();
+  }
+
+  updateSelectionStatus();
+
+  if (options.render !== false) {
+    startResultRender();
+  }
+}
+
+function populateOption(select, value, label) {
+  const option = document.createElement("option");
+  option.value = value;
+  option.textContent = label;
+  select.appendChild(option);
+}
+
+function populateControl(kind) {
+  const { select, range } = controlElements(kind);
+  const values = controlValues(kind);
+  select.innerHTML = "";
+  values.forEach((value) => {
+    populateOption(select, value, optionLabelForValue(kind, value));
+  });
+  range.max = String(values.length - 1);
+  range.value = "0";
+}
+
+function defaultVariantValue() {
+  const defaults = state.manifest.defaults || {};
+  if (defaults.variant !== null && defaults.variant !== undefined) {
+    return String(defaults.variant);
+  }
+  const firstVariant = state.manifest.variants[0];
+  return firstVariant ? String(firstVariant.id) : ALL_VALUE;
+}
+
+function renderMeta() {
+  const manifest = state.manifest;
+  els.runTitle.textContent = manifest.run_label || "Jailbreak results";
+  els.modelName.textContent = manifest.model || "--";
+  els.experimentName.textContent = manifest.experiment || "--";
+  els.checkpointCount.textContent = compactNumber(manifest.summary.variant_count);
+  els.itemCount.textContent = compactNumber(manifest.summary.item_count);
+  els.selectionSummary.textContent =
+    `${manifest.summary.prompt_count} prompts, ${manifest.summary.trial_count} trials`;
+
+  document.title = `${manifest.run_label || "Jailbreak"} | Generation Viewer`;
+
+  populateControl("prompt");
+  populateControl("trial");
+  populateControl("variant");
+
+  els.promptMinLabel.textContent = labelForValue("prompt", promptValues()[0] || "0");
+  els.trialMinLabel.textContent = labelForValue("trial", trialValues()[0] || "0");
+  els.variantMinLabel.textContent = labelForValue("variant", variantValues()[0] || "original");
+
+  state.promptValue = manifest.defaults.prompt_id !== null && manifest.defaults.prompt_id !== undefined
+    ? String(manifest.defaults.prompt_id)
+    : ALL_VALUE;
+  state.trialValue = manifest.defaults.trial_id !== null && manifest.defaults.trial_id !== undefined
+    ? String(manifest.defaults.trial_id)
+    : ALL_VALUE;
+  state.variantValue = defaultVariantValue();
+
+  syncControl("prompt");
+  syncControl("trial");
+  syncControl("variant");
+  updateSelectionStatus();
+}
+
+function selectedLabels() {
+  return [
+    labelForValue("prompt", state.promptValue),
+    labelForValue("trial", state.trialValue),
+    labelForValue("variant", state.variantValue)
+  ];
+}
+
+function selectedMatchEstimate() {
+  const promptCount = state.promptValue === ALL_VALUE ? state.manifest.prompts.length : 1;
+  const trialCount = state.trialValue === ALL_VALUE ? state.manifest.trials.length : 1;
+  const variantCount = state.variantValue === ALL_VALUE ? state.manifest.variants.length : 1;
+  return promptCount * trialCount * variantCount;
+}
+
+function updateSelectionStatus() {
+  const labels = selectedLabels();
+  const estimate = selectedMatchEstimate();
+  const allCount = [state.promptValue, state.trialValue, state.variantValue]
+    .filter((value) => value === ALL_VALUE).length;
+
+  els.currentStepLabel.textContent = labels.join(" · ");
+  els.checkpointCounter.textContent = `${compactNumber(estimate)} matching responses`;
+  els.resultTitle.textContent = allCount === 0 ? "Selected Response" : "Selected Responses";
+}
+
+function renderFigures() {
+  els.figureMount.innerHTML = "";
+  const figures = state.manifest.figures || [];
+  if (!figures.length) {
+    els.figureMount.appendChild(makeEl("div", "empty-state", "No metric figures found."));
+    return;
+  }
+
+  figures.forEach((figure) => {
+    const wrapper = makeEl("figure", "figure metric-figure");
+    const link = document.createElement("a");
+    link.href = assetUrl(figure.path);
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.title = "Open full-size figure";
+
+    const image = document.createElement("img");
+    image.src = assetUrl(figure.path);
+    image.alt = figure.label;
+    image.loading = "lazy";
+
+    const caption = makeEl("figcaption", "", figure.label);
+    link.appendChild(image);
+    wrapper.append(link, caption);
+    els.figureMount.appendChild(wrapper);
+  });
+}
+
+function renderPromptFigure() {
+  els.promptFigureMount.innerHTML = "";
+
+  if (state.promptValue === ALL_VALUE) {
+    els.promptFigureMount.appendChild(makeEl("div", "empty-state", "All prompts selected."));
+    return;
+  }
+
+  const promptFigures = state.manifest.prompt_figures || {};
+  const figure = promptFigures[state.promptValue];
+  if (!figure) {
+    els.promptFigureMount.appendChild(makeEl("div", "empty-state", "No ln_trace summary figure found for this prompt."));
+    return;
+  }
+
+  const wrapper = makeEl("figure", "figure prompt-figure");
+  const link = document.createElement("a");
+  link.href = assetUrl(figure.path);
+  link.target = "_blank";
+  link.rel = "noopener";
+  link.title = "Open full-size figure";
+
+  const image = document.createElement("img");
+  image.src = assetUrl(figure.path);
+  image.alt = figure.label || `ln_trace summary for prompt ${state.promptValue}`;
+  image.loading = "lazy";
+
+  const caption = makeEl(
+    "figcaption",
+    "",
+    figure.label || `ln_trace summary for prompt ${state.promptValue}`
+  );
+  link.appendChild(image);
+  wrapper.append(link, caption);
+  els.promptFigureMount.appendChild(wrapper);
+}
+
+function selectedChunkIndexes() {
+  return state.manifest.chunks
+    .map((chunk, index) => ({ chunk, index }))
+    .filter(({ chunk }) => {
+      if (state.variantValue !== ALL_VALUE && chunk.variant !== state.variantValue) {
+        return false;
+      }
+      if (state.promptValue !== ALL_VALUE && String(chunk.prompt_id) !== state.promptValue) {
+        return false;
+      }
+      return true;
+    })
+    .map(({ index }) => index);
+}
+
+function itemMatchesControls(item) {
+  if (state.promptValue !== ALL_VALUE && String(item.prompt_id) !== state.promptValue) {
+    return false;
+  }
+  if (state.trialValue !== ALL_VALUE && String(item.trial_id) !== state.trialValue) {
+    return false;
+  }
+  return true;
+}
+
+function chunkCacheKey(chunk) {
+  return `${chunk.variant}:${chunk.prompt_id}`;
+}
+
+function loadChunkData(index) {
+  const chunk = state.manifest.chunks[index];
+  if (!chunk) {
+    return Promise.resolve(null);
+  }
+
+  const key = chunkCacheKey(chunk);
+  if (state.loadedChunks.has(key)) {
+    return Promise.resolve(state.loadedChunks.get(key));
+  }
+  if (state.loading.has(key)) {
+    return state.loading.get(key);
+  }
+
+  const promise = fetchJson(chunk.path)
+    .then((data) => {
+      state.loadedChunks.set(key, data);
+      return data;
+    })
+    .finally(() => {
+      state.loading.delete(key);
+    });
+
+  state.loading.set(key, promise);
+  return promise;
+}
+
+function renderTextBlock(className, title, text) {
+  const block = makeEl("div", `text-block ${className}`);
+  block.appendChild(makeEl("h3", "", title));
+  const pre = document.createElement("pre");
+  pre.textContent = text || "";
+  block.appendChild(pre);
+  return block;
+}
+
+function renderItem(item) {
+  const article = makeEl("article", "generation-card");
+
+  const head = makeEl("div", "generation-head");
+  const tags = makeEl("div", "tag-row");
+  tags.appendChild(makeEl("span", "tag accent", variantLabel(item.variant)));
+  tags.appendChild(makeEl("span", "tag", `Prompt ${item.prompt_id}`));
+  tags.appendChild(makeEl("span", "tag warm", `Trial ${item.trial_id}`));
+  if (item.truncated) {
+    tags.appendChild(makeEl("span", "tag", "Truncated"));
+  }
+
+  const charCount = makeEl(
+    "div",
+    "char-count",
+    `${compactNumber(item.generated_chars || 0)} generated chars`
+  );
+  head.append(tags, charCount);
+
+  article.appendChild(head);
+  article.appendChild(renderTextBlock("prompt", "Prompt", item.prompt));
+  article.appendChild(renderTextBlock("generated", "Generated", item.generated));
+  return article;
+}
+
+function appendResultItems(items) {
+  if (!items.length) {
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  items.forEach((item) => {
+    fragment.appendChild(renderItem(item));
+  });
+  els.resultList.appendChild(fragment);
+
+  if (state.renderedCount === 0) {
+    els.resultList.closest(".result-mount")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+}
+
+function updateResultSummary() {
+  const estimate = selectedMatchEstimate();
+  const totalChunks = state.resultChunkIndexes.length;
+  const scannedChunks = state.scannedChunkCount;
+  const chunkWord = totalChunks === 1 ? "chunk" : "chunks";
+  const chunkPart = `${compactNumber(scannedChunks)} of ${compactNumber(totalChunks)} prompt ${chunkWord} scanned`;
+
+  els.resultSummary.textContent =
+    `${compactNumber(state.renderedCount)} of ${compactNumber(estimate)} shown · ${chunkPart}`;
+}
+
+function setLoadMoreState(hasMore) {
+  els.loadMoreButton.hidden = !hasMore;
+  els.loadMoreButton.disabled = state.isLoadingBatch;
+  els.loadMoreButton.textContent = state.isLoadingBatch ? "Loading..." : "Load more";
+}
+
+function resetResultState() {
+  state.resultChunkIndexes = selectedChunkIndexes();
+  state.resultChunkCursor = 0;
+  state.pendingItems = [];
+  state.renderedCount = 0;
+  state.scannedChunkCount = 0;
+  state.isLoadingBatch = false;
+  els.resultList.innerHTML = "";
+  setLoadMoreState(false);
+  updateResultSummary();
+}
+
+async function loadMoreResults(session = state.resultSession) {
+  if (state.isLoadingBatch) {
+    return;
+  }
+
+  state.isLoadingBatch = true;
+  showResultStatus("Loading selected responses...");
+  setLoadMoreState(true);
+
+  try {
+    let chunksLoaded = 0;
+    while (
+      state.pendingItems.length < PAGE_SIZE &&
+      state.resultChunkCursor < state.resultChunkIndexes.length &&
+      chunksLoaded < CHUNKS_PER_BATCH
+    ) {
+      const chunkIndex = state.resultChunkIndexes[state.resultChunkCursor];
+      state.resultChunkCursor += 1;
+      chunksLoaded += 1;
+
+      const data = await loadChunkData(chunkIndex);
+      if (session !== state.resultSession) {
+        return;
+      }
+      if (!data) {
+        continue;
+      }
+
+      const chunk = state.manifest.chunks[chunkIndex];
+      const matches = data.items
+        .filter(itemMatchesControls)
+        .map((item) => ({
+          ...item,
+          variant: chunk.variant,
+          chunk_index: chunkIndex
+        }));
+      state.pendingItems.push(...matches);
+      state.scannedChunkCount += 1;
+    }
+
+    const batch = state.pendingItems.splice(0, PAGE_SIZE);
+    clearResultStatus();
+    appendResultItems(batch);
+    state.renderedCount += batch.length;
+  } catch (error) {
+    if (session === state.resultSession) {
+      clearResultStatus();
+      els.resultList.appendChild(makeEl("div", "empty-state", `Could not load selected responses: ${error.message}`));
+    }
+  } finally {
+    if (session !== state.resultSession) {
+      state.isLoadingBatch = false;
+      return;
+    }
+
+    state.isLoadingBatch = false;
+    const hasMore = state.pendingItems.length > 0 || state.resultChunkCursor < state.resultChunkIndexes.length;
+    setLoadMoreState(hasMore);
+    updateResultSummary();
+
+    if (state.renderedCount === 0 && hasMore && !els.resultList.children.length) {
+      showResultStatus("No matching responses in scanned chunks yet. Load more to continue.");
+    }
+
+    if (state.renderedCount === 0 && !hasMore && !els.resultList.children.length) {
+      els.resultList.appendChild(makeEl("div", "empty-state", "No exported responses match the current controls."));
+    }
+  }
+}
+
+function defaultSelectionPreview() {
+  const defaults = state.manifest.defaults || {};
+  const preview = defaults.preview_item;
+  if (!preview) {
+    return null;
+  }
+
+  const previewVariant = preview.variant !== undefined ? String(preview.variant) : defaultVariantValue();
+  const matchesDefaultPrompt = state.promptValue === String(defaults.prompt_id);
+  const matchesDefaultTrial = state.trialValue === String(defaults.trial_id);
+  const matchesDefaultVariant = state.variantValue === previewVariant;
+
+  if (!matchesDefaultPrompt || !matchesDefaultTrial || !matchesDefaultVariant) {
+    return null;
+  }
+
+  return {
+    ...preview,
+    variant: previewVariant
+  };
+}
+
+function startResultRender() {
+  state.resultSession += 1;
+  const session = state.resultSession;
+  resetResultState();
+
+  const preview = defaultSelectionPreview();
+  if (preview) {
+    appendResultItems([preview]);
+    state.renderedCount = 1;
+    state.scannedChunkCount = 1;
+    updateResultSummary();
+    return;
+  }
+
+  showResultStatus("Loading selected responses...");
+  loadMoreResults(session);
+}
+
+function setupEvents() {
+  els.promptSelect.addEventListener("change", (event) => {
+    setControl("prompt", event.target.value);
+  });
+  els.promptRange.addEventListener("input", (event) => {
+    setControl("prompt", sliderIndexToValue("prompt", event.target.value));
+  });
+
+  els.trialSelect.addEventListener("change", (event) => {
+    setControl("trial", event.target.value);
+  });
+  els.trialRange.addEventListener("input", (event) => {
+    setControl("trial", sliderIndexToValue("trial", event.target.value));
+  });
+
+  els.variantSelect.addEventListener("change", (event) => {
+    setControl("variant", event.target.value);
+  });
+  els.variantRange.addEventListener("input", (event) => {
+    setControl("variant", sliderIndexToValue("variant", event.target.value));
+  });
+
+  els.loadMoreButton.addEventListener("click", () => {
+    loadMoreResults(state.resultSession);
+  });
+}
+
+async function init() {
+  if (window.location.protocol === "file:") {
+    setError(
+      "This viewer must be opened over HTTP, not as a local file. Run: python3 -m http.server 8765"
+    );
+    return;
+  }
+
+  try {
+    state.manifest = await fetchJson(`data/manifest.json?v=${DATA_VERSION}`);
+  } catch (error) {
+    setError(`Could not load data/manifest.json: ${error.message}`);
+    return;
+  }
+
+  renderMeta();
+  renderPromptFigure();
+  renderFigures();
+  setupEvents();
+  startResultRender();
+}
+
+window.addEventListener("error", (event) => {
+  setError(`Unexpected viewer error: ${event.message}`);
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+  const reason = event.reason && event.reason.message ? event.reason.message : String(event.reason);
+  setError(`Unexpected viewer error: ${reason}`);
+});
+
+init();

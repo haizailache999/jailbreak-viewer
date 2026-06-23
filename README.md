@@ -30,7 +30,9 @@ Open `http://localhost:8765/`. Do not open `index.html` directly via `file://`.
 
 ## GitHub Pages
 
-Push this folder to a GitHub repo, enable Pages from branch `main` / root, then open the published URL.
+1. Open **Settings → Pages** on the repo.
+2. Set **Source** to **Deploy from a branch**, branch **`main`**, folder **`/ (root)`**.
+3. After deploy, open `https://haizailache999.github.io/jailbreak-viewer/`.
 
 ## Controls
 
